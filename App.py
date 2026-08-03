@@ -2,11 +2,12 @@ import csv
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import os
 import smtplib
+import av
 import cv2
 import numpy as np
 import streamlit as st
+from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 from ultralytics import YOLO
 
 # ================================
@@ -19,7 +20,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for Modern Dark UI Styling
 st.markdown(
     """
     <style>
@@ -93,22 +93,14 @@ def load_yolo_model():
 model = load_yolo_model()
 MASTER_LIST = list(model.names.values())
 
-# Persistent Session State Variables
 if "session_attendance" not in st.session_state:
     st.session_state.session_attendance = {}
-
-if "processed_image" not in st.session_state:
-    st.session_state.processed_image = None
-
-if "last_detection_msg" not in st.session_state:
-    st.session_state.last_detection_msg = None
 
 
 # ================================
 # BACKEND FUNCTIONS
 # ================================
 def send_direct_absent_email(student_name, student_email, date_str):
-    """Sends a personalized email notification directly to an absent student."""
     if not SEND_EMAIL or not student_email:
         return False, "Disabled or missing email address."
 
@@ -139,7 +131,6 @@ def send_direct_absent_email(student_name, student_email, date_str):
 
 
 def log_attendance(name, cutoff_time_str):
-    """Logs person's entry into CSV as 'Present' or 'Late'."""
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -152,7 +143,6 @@ def log_attendance(name, cutoff_time_str):
     except ValueError:
         status = "Present"
 
-    # Avoid duplicate entry for the same day in CSV
     try:
         with open(CSV_FILE, "r") as f:
             content = f.read()
@@ -171,7 +161,6 @@ def log_attendance(name, cutoff_time_str):
 
 
 def finalize_absentees():
-    """Logs missing students as Absent and sends direct individual emails."""
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -221,6 +210,59 @@ def finalize_absentees():
 
 
 # ================================
+# AUTOMATIC VIDEO STREAM PROCESSOR
+# ================================
+class YOLOVideoProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.conf_threshold = 0.25
+        self.cutoff_time = "09:15"
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+
+        # Live Automatic YOLO Inference on Frame
+        results = model(img, conf=self.conf_threshold, verbose=False)[0]
+
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            name = (
+                MASTER_LIST[cls_id]
+                if cls_id < len(MASTER_LIST)
+                else f"ID_{cls_id}"
+            )
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+            # Auto Log Entry
+            status, timestamp_str = log_attendance(name, self.cutoff_time)
+            st.session_state.session_attendance[name] = {
+                "Date & Time": timestamp_str,
+                "Status": status,
+            }
+
+            # Draw Bounding Box and Label directly onto Live Stream
+            box_color = (0, 255, 128) if status == "Present" else (0, 165, 255)
+            cv2.rectangle(img, (x1, y1), (x2, y2), box_color, 3)
+            label = f"{name} ({conf * 100:.1f}%) [{status}]"
+
+            (w, h), _ = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+            )
+            cv2.rectangle(img, (x1, y1 - 25), (x1 + w, y1), box_color, -1)
+            cv2.putText(
+                img,
+                label,
+                (x1, y1 - 7),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 0),
+                2,
+            )
+
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+
+# ================================
 # UI HEADER & SIDEBAR
 # ================================
 st.markdown(
@@ -243,7 +285,7 @@ conf_slider = st.sidebar.slider(
     "Confidence Threshold",
     min_value=0.1,
     max_value=1.0,
-    value=0.25,  # Lowered default to 0.25 for better initial detection
+    value=0.25,
     step=0.05,
     help="Minimum detection probability required for recognition.",
 )
@@ -256,90 +298,23 @@ for student in MASTER_LIST:
 # ================================
 # DASHBOARD TABS
 # ================================
-tab1, tab2 = st.tabs(["📷 Live Camera Feed", "📊 Attendance Summary & Alerts"])
+tab1, tab2 = st.tabs(["🎥 Live Automatic Stream", "📊 Attendance Summary & Alerts"])
 
 with tab1:
-    col_cam, col_res = st.columns([1, 1])
+    st.subheader("📹 Real-Time Automatic Continuous Detector")
+    st.markdown("Click **START** to open live video stream feed with continuous detection.")
 
-    with col_cam:
-        st.subheader("📸 Camera Capture")
-        picture = st.camera_input("Position face in camera view and capture frame")
+    webrtc_ctx = webrtc_streamer(
+        key="yolo-attendance-stream",
+        mode=WebRtcMode.SENDRECV,
+        video_processor_factory=YOLOVideoProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
 
-    with col_res:
-        st.subheader("🎯 Real-Time Detections")
-
-        if picture:
-            bytes_data = picture.getvalue()
-            cv_img = cv2.imdecode(
-                np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR
-            )
-
-            # Perform Inference
-            results = model(cv_img, conf=conf_slider, verbose=False)[0]
-
-            detected_in_frame = False
-            for box in results.boxes:
-                detected_in_frame = True
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                name = (
-                    MASTER_LIST[cls_id]
-                    if cls_id < len(MASTER_LIST)
-                    else f"ID_{cls_id}"
-                )
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-                # Log entry to CSV and session memory
-                status, timestamp_str = log_attendance(name, cutoff_input)
-                st.session_state.session_attendance[name] = {
-                    "Date & Time": timestamp_str,
-                    "Status": status,
-                }
-
-                # Draw Bounding Box and Label
-                box_color = (
-                    (0, 255, 128) if status == "Present" else (0, 165, 255)
-                )
-                cv2.rectangle(cv_img, (x1, y1), (x2, y2), box_color, 3)
-                label = f"{name} ({conf * 100:.1f}%) [{status}]"
-
-                # Background fill behind text for maximum visual clarity
-                (w, h), _ = cv2.getTextSize(
-                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-                )
-                cv2.rectangle(
-                    cv_img, (x1, y1 - 25), (x1 + w, y1), box_color, -1
-                )
-                cv2.putText(
-                    cv_img,
-                    label,
-                    (x1, y1 - 7),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 0, 0),
-                    2,
-                )
-
-            # Convert BGR image to RGB for displaying in browser
-            rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-
-            # Persist processed image in Session State
-            st.session_state.processed_image = rgb_img
-            st.session_state.last_detection_msg = (
-                "success" if detected_in_frame else "warning"
-            )
-
-        # Display Persisted Detection Frame
-        if st.session_state.processed_image is not None:
-            st.image(
-                st.session_state.processed_image, use_container_width=True
-            )
-            if st.session_state.last_detection_msg == "warning":
-                st.warning(
-                    "No recognized student faces detected in frame. Try lowering the Confidence Threshold slider."
-                )
-        else:
-            st.info("Awaiting camera frame capture...")
+    if webrtc_ctx.video_processor:
+        webrtc_ctx.video_processor.conf_threshold = conf_slider
+        webrtc_ctx.video_processor.cutoff_time = cutoff_input
 
 with tab2:
     st.subheader("📈 Real-Time Class Analytics")
