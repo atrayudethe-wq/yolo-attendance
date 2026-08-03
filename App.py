@@ -23,7 +23,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        /* Main Header Banner */
         .main-header {
             background: linear-gradient(135deg, #1E1E2F 0%, #0F0F17 100%);
             padding: 24px;
@@ -44,15 +43,11 @@ st.markdown(
             font-size: 1.05rem;
             margin: 0;
         }
-
-        /* Metric Cards Styling */
         div[data-testid="stMetricValue"] {
             font-size: 1.8rem;
             font-weight: bold;
             color: #00E676;
         }
-
-        /* Primary Button Styling */
         .stButton>button {
             border-radius: 8px;
             font-weight: 600;
@@ -68,23 +63,21 @@ st.markdown(
 # ================================
 SEND_EMAIL = True
 
-# Sender Gmail Configuration
 SENDER_EMAIL = "robosapiensai1@gmail.com"
 SENDER_PASSWORD = "lxknevuplkzarrhh"  # 16-character Gmail App Password
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
-# Map each class name/student name to their personal email address
-#STUDENT_EMAILS = {
- #   "Kalki Mehta": "kalki.mehta@aeaschoolvashi.edu.in",
- #  "Madhurima Mukherjee": "madhurima.mukherjee@aeaschoolvashi.edu.in",
-  #  "Arush Shetty": "arush.shetty@aeaschoolvashi.edu.in",
-   # "Shreyas Bhoite": "shreyas.bhoite@aeaschool.vashi.edu.in",
-    #"Siddh Gala": "siddh.gala@aeaschoolvashi.edu.in",
-    #"Dhairya Shah": "shah.dhairya@aeaschoolvashi.edu.in",
-    #"Shreyansh Choudhary": "shreyansh.choudhary@aeaschoolvashi.edu.in",
-    #"Aryan Sareen": "aryan.sareen@aeaschoolvashi.edu.in",
-#}
+STUDENT_EMAILS = {
+    "Kalki Mehta": "kalki.mehta@aeaschoolvashi.edu.in",
+    "Madhurima Mukherjee": "madhurima.mukherjee@aeaschoolvashi.edu.in",
+    "Arush Shetty": "arush.shetty@aeaschoolvashi.edu.in",
+    "Shreyas Bhoite": "shreyas.bhoite@aeaschool.vashi.edu.in",
+    "Siddh Gala": "siddh.gala@aeaschoolvashi.edu.in",
+    "Dhairya Shah": "shah.dhairya@aeaschoolvashi.edu.in",
+    "Shreyansh Choudhary": "shreyansh.choudhary@aeaschoolvashi.edu.in",
+    "Aryan Sareen": "aryan.sareen@aeaschoolvashi.edu.in",
+}
 
 CSV_FILE = "attendance.csv"
 
@@ -100,9 +93,15 @@ def load_yolo_model():
 model = load_yolo_model()
 MASTER_LIST = list(model.names.values())
 
-# Initialize session state for tracking attendance in memory
+# Persistent Session State Variables
 if "session_attendance" not in st.session_state:
     st.session_state.session_attendance = {}
+
+if "processed_image" not in st.session_state:
+    st.session_state.processed_image = None
+
+if "last_detection_msg" not in st.session_state:
+    st.session_state.last_detection_msg = None
 
 
 # ================================
@@ -196,10 +195,7 @@ def finalize_absentees():
         writer = csv.writer(f)
         for name in MASTER_LIST:
             if name not in logged_names:
-                # 1. Log as Absent in CSV
                 writer.writerow([name, date_str, timestamp_str, "Absent"])
-
-                # 2. Send email directly to this absent student
                 recipient_email = STUDENT_EMAILS.get(name)
                 if recipient_email:
                     success, msg = send_direct_absent_email(
@@ -214,7 +210,11 @@ def finalize_absentees():
                     status_text = "⚠️ No email on file"
 
                 dispatch_logs.append(
-                    {"Student": name, "Status": "Absent", "Dispatch Note": status_text}
+                    {
+                        "Student": name,
+                        "Status": "Absent",
+                        "Dispatch Note": status_text,
+                    }
                 )
 
     return dispatch_logs
@@ -243,7 +243,7 @@ conf_slider = st.sidebar.slider(
     "Confidence Threshold",
     min_value=0.1,
     max_value=1.0,
-    value=0.5,
+    value=0.25,  # Lowered default to 0.25 for better initial detection
     step=0.05,
     help="Minimum detection probability required for recognition.",
 )
@@ -267,12 +267,14 @@ with tab1:
 
     with col_res:
         st.subheader("🎯 Real-Time Detections")
+
         if picture:
             bytes_data = picture.getvalue()
             cv_img = cv2.imdecode(
                 np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR
             )
 
+            # Perform Inference
             results = model(cv_img, conf=conf_slider, verbose=False)[0]
 
             detected_in_frame = False
@@ -287,39 +289,61 @@ with tab1:
                 )
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                # Log entry to CSV and memory
+                # Log entry to CSV and session memory
                 status, timestamp_str = log_attendance(name, cutoff_input)
                 st.session_state.session_attendance[name] = {
                     "Date & Time": timestamp_str,
                     "Status": status,
                 }
 
-                # Bounding Box Colors: Green for Present, Orange for Late
-                box_color = (0, 255, 128) if status == "Present" else (0, 165, 255)
-                cv2.rectangle(cv_img, (x1, y1), (x2, y2), box_color, 2)
+                # Draw Bounding Box and Label
+                box_color = (
+                    (0, 255, 128) if status == "Present" else (0, 165, 255)
+                )
+                cv2.rectangle(cv_img, (x1, y1), (x2, y2), box_color, 3)
                 label = f"{name} ({conf * 100:.1f}%) [{status}]"
+
+                # Background fill behind text for maximum visual clarity
+                (w, h), _ = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                )
+                cv2.rectangle(
+                    cv_img, (x1, y1 - 25), (x1 + w, y1), box_color, -1
+                )
                 cv2.putText(
                     cv_img,
                     label,
-                    (x1, y1 - 10),
+                    (x1, y1 - 7),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    box_color,
+                    (0, 0, 0),
                     2,
                 )
 
+            # Convert BGR image to RGB for displaying in browser
             rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-            st.image(rgb_img, use_container_width=True)
 
-            if not detected_in_frame:
-                st.warning("No recognized student faces detected in frame.")
+            # Persist processed image in Session State
+            st.session_state.processed_image = rgb_img
+            st.session_state.last_detection_msg = (
+                "success" if detected_in_frame else "warning"
+            )
+
+        # Display Persisted Detection Frame
+        if st.session_state.processed_image is not None:
+            st.image(
+                st.session_state.processed_image, use_container_width=True
+            )
+            if st.session_state.last_detection_msg == "warning":
+                st.warning(
+                    "No recognized student faces detected in frame. Try lowering the Confidence Threshold slider."
+                )
         else:
             st.info("Awaiting camera frame capture...")
 
 with tab2:
     st.subheader("📈 Real-Time Class Analytics")
 
-    # Metrics Overview
     total_enrolled = len(MASTER_LIST)
     total_logged = len(st.session_state.session_attendance)
     present_count = sum(
@@ -363,7 +387,11 @@ with tab2:
             logs = finalize_absentees()
 
         if logs:
-            st.warning("Session Finalized. The following students were marked ABSENT:")
+            st.warning(
+                "Session Finalized. The following students were marked ABSENT:"
+            )
             st.table(logs)
         else:
-            st.success("🎉 All enrolled students were present! No absentee emails needed.")
+            st.success(
+                "🎉 All enrolled students were present! No absentee emails needed."
+            )
