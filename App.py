@@ -75,16 +75,16 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
 # Map each class name/student name to their personal email address
-STUDENT_EMAILS = {
-    "Kalki Mehta": "kalki.mehta@aeaschoolvashi.edu.in",
-    "Madhurima Mukherjee": "madhurima.mukherjee@aeaschoolvashi.edu.in",
-    "Arush Shetty": "arush.shetty@aeaschoolvashi.edu.in",
-    "Shreyas Bhoite": "shreyas.bhoite@aeaschool.vashi.edu.in",
-    "Siddh Gala": "siddh.gala@aeaschoolvashi.edu.in",
-    "Dhairya Shah": "shah.dhairya@aeaschoolvashi.edu.in",
-    "Shreyansh Choudhary": "shreyansh.choudhary@aeaschoolvashi.edu.in",
-    "Aryan Sareen": "aryan.sareen@aeaschoolvashi.edu.in",
-}
+#STUDENT_EMAILS = {
+ #   "Kalki Mehta": "kalki.mehta@aeaschoolvashi.edu.in",
+ #  "Madhurima Mukherjee": "madhurima.mukherjee@aeaschoolvashi.edu.in",
+  #  "Arush Shetty": "arush.shetty@aeaschoolvashi.edu.in",
+   # "Shreyas Bhoite": "shreyas.bhoite@aeaschool.vashi.edu.in",
+    #"Siddh Gala": "siddh.gala@aeaschoolvashi.edu.in",
+    #"Dhairya Shah": "shah.dhairya@aeaschoolvashi.edu.in",
+    #"Shreyansh Choudhary": "shreyansh.choudhary@aeaschoolvashi.edu.in",
+    #"Aryan Sareen": "aryan.sareen@aeaschoolvashi.edu.in",
+#}
 
 CSV_FILE = "attendance.csv"
 
